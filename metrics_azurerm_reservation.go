@@ -12,21 +12,20 @@ import (
 	"github.com/webdevops/go-common/utils/to"
 )
 
-// provisioningStateToNumber maps reservation provisioningState to a numeric value for the metric.
-var provisioningStateToNumber = map[string]float64{
-	"Creating":              0,
-	"PendingResourceHold":   1,
-	"ConfirmedResourceHold": 2,
-	"PendingBilling":        3,
-	"ConfirmedBilling":      4,
-	"Created":               5,
-	"Succeeded":             6,
-	"Cancelled":             7,
-	"Expired":               8,
-	"BillingFailed":         9,
-	"Failed":                10,
-	"Split":                 11,
-	"Merged":                12,
+var provisioningStates = []string{
+	"Creating",
+	"PendingResourceHold",
+	"ConfirmedResourceHold",
+	"PendingBilling",
+	"ConfirmedBilling",
+	"Created",
+	"Succeeded",
+	"Cancelled",
+	"Expired",
+	"BillingFailed",
+	"Failed",
+	"Split",
+	"Merged",
 }
 
 // Define MetricsCollectorAzureRmReservation struct
@@ -133,12 +132,13 @@ func (m *MetricsCollectorAzureRmReservation) Setup(collector *collector.Collecto
 		"reservedResourceType",
 		"skuDescription",
 	}
+	reservationListAllLabelsWithState := append(append([]string{}, reservationListAllLabels...), "provisioningState")
 	m.prometheus.reservationProvisioningState = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "azurerm_reservation_provisioning_state",
-			Help: "Azure ResourceManager Reservation provisioning state (Creating=0, PendingResourceHold=1, ConfirmedResourceHold=2, PendingBilling=3, ConfirmedBilling=4, Created=5, Succeeded=6, Cancelled=7, Expired=8, BillingFailed=9, Failed=10, Split=11, Merged=12, -1=Unknown)",
+			Help: "Azure ResourceManager Reservation provisioning state as a label (value 1 for current state, 0 otherwise)",
 		},
-		reservationListAllLabels,
+		reservationListAllLabelsWithState,
 	)
 	m.Collector.RegisterMetricList("reservationProvisioningState", m.prometheus.reservationProvisioningState, true)
 
@@ -295,7 +295,7 @@ func (m *MetricsCollectorAzureRmReservation) collectReservationListAll(logger *s
 			}
 			skuDescription := to.String(item.Properties.SKUDescription)
 
-			labels := prometheus.Labels{
+			baseLabels := prometheus.Labels{
 				"reservationOrderID":   reservationOrderID,
 				"reservationID":        reservationID,
 				"skuName":              skuName,
@@ -306,17 +306,28 @@ func (m *MetricsCollectorAzureRmReservation) collectReservationListAll(logger *s
 				"skuDescription":       skuDescription,
 			}
 
+			currentState := ""
 			if item.Properties.ProvisioningState != nil {
-				stateStr := string(*item.Properties.ProvisioningState)
-				if num, ok := provisioningStateToNumber[stateStr]; ok {
-					provisioningStateMetric.Add(labels, num)
-				} else {
-					provisioningStateMetric.Add(labels, -1)
+				currentState = string(*item.Properties.ProvisioningState)
+			}
+
+			for _, state := range provisioningStates {
+				labels := prometheus.Labels{}
+				for k, v := range baseLabels {
+					labels[k] = v
 				}
+				labels["provisioningState"] = state
+
+				value := 0.0
+				if state == currentState {
+					value = 1.0
+				}
+
+				provisioningStateMetric.Add(labels, value)
 			}
 
 			if item.Properties.ExpiryDate != nil {
-				expiryTimestampMetric.Add(labels, float64(item.Properties.ExpiryDate.Unix()))
+				expiryTimestampMetric.Add(baseLabels, float64(item.Properties.ExpiryDate.Unix()))
 			}
 		}
 	}
